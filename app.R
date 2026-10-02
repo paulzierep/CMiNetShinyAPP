@@ -26,7 +26,6 @@ server <- function(input, output, session) {
   downloads <- galaxy_ie_send_server(input, output, session, label = "CMiNet result")
 
   # Picker for datasets already in this Galaxy history.
-  imported <- galaxy_ie_picker_server(input, output, session)
   shiny::observeEvent(imported(), {
     # An import repoints CMINET_INPUT at the downloaded copy; tell the file
     # input about it so the form and the data() reactive both pick it up.
@@ -762,8 +761,6 @@ ui <- navbarPage(
     sidebarLayout(
       sidebarPanel(
         fileInput("file", "Upload Microbiome Data", accept = c(".csv")),
-        # Renders nothing unless running inside a Galaxy interactive tool.
-        galaxy_ie_picker_ui(),
         downloadButton("downloadSampleData", "Sample Data"),
         tags$i(
           class = "fa fa-question-circle",
