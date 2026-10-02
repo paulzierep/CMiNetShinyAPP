@@ -761,6 +761,7 @@ ui <- navbarPage(
     sidebarLayout(
       sidebarPanel(
         fileInput("file", "Upload Microbiome Data", accept = c(".csv")),
+        galaxy_ie_send_ui(),
         downloadButton("downloadSampleData", "Sample Data"),
         tags$i(
           class = "fa fa-question-circle",
