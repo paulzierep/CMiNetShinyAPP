@@ -6,10 +6,37 @@ library(SPRING)
 library(CMiNet)
 library(igraph)
 library(visNetwork)
+
+# Galaxy helpers are inert outside a Galaxy interactive tool.
+if (file.exists("galaxy_helpers.R")) {
+  source("galaxy_helpers.R")
+}
+if (file.exists("galaxy_ie.R")) {
+  source("galaxy_ie.R")
+  galaxy_ie_app("cminet", "CMINET_OUTPUT_DIR", "CMINET_INPUT")
+}
+
 server <- function(input, output, session) {
+  # Preload files staged by the Galaxy wrapper, if any.
+  session$onFlushed(function() {
+    cminet_stage_galaxy_inputs(session)
+  }, once = TRUE)
+
+  # "Send to Galaxy" buttons, injected next to every download in the app.
+  downloads <- galaxy_ie_send_server(input, output, session, label = "CMiNet result")
+
+  # Picker for datasets already in this Galaxy history.
+  imported <- galaxy_ie_picker_server(input, output, session)
+  shiny::observeEvent(imported(), {
+    # An import repoints CMINET_INPUT at the downloaded copy; tell the file
+    # input about it so the form and the data() reactive both pick it up.
+    cminet_send_file_input(session, "file", Sys.getenv("CMINET_INPUT", unset = ""))
+  }, ignoreInit = TRUE)
+
   data <- reactive({
-    req(input$file)  # Ensure a file is uploaded
-    df <- read.csv(input$file$datapath, row.names = 1, check.names = FALSE)
+    path <- cminet_resolve_input(input$file, Sys.getenv("CMINET_INPUT", unset = ""))
+    req(path)  # Ensure a file is uploaded
+    df <- read.csv(path, row.names = 1, check.names = FALSE)
     isCount <- input$countBased
     if (!isCount) {
       df <- df + 0.0001
@@ -18,8 +45,9 @@ server <- function(input, output, session) {
   })
   
   taxa_name <- reactive({
-    req(input$file)
-    df <- read.csv(input$file$datapath, row.names = 1, check.names = FALSE)
+    path <- cminet_resolve_input(input$file, Sys.getenv("CMINET_INPUT", unset = ""))
+    req(path)
+    df <- read.csv(path, row.names = 1, check.names = FALSE)
     taxa_name_matrix <- matrix(0, nrow = ncol(df), ncol = 2)
     taxa_name_matrix[, 1] <- colnames(df)
     taxa_name_matrix[, 2] <- 1:ncol(df)
@@ -432,7 +460,7 @@ server <- function(input, output, session) {
     )
   })
   
-  output$downloadBinaryFolder <- downloadHandler(
+  output$downloadBinaryFolder <- galaxy_ie_download_with(downloads, "downloadBinaryFolder",
     filename = function() {
       paste("Binary_Network_", Sys.Date(), ".zip", sep = "")
     },
@@ -459,7 +487,7 @@ server <- function(input, output, session) {
     }
   )
 
-  output$downloadNetworkFolder <- downloadHandler(
+  output$downloadNetworkFolder <- galaxy_ie_download_with(downloads, "downloadNetworkFolder",
     filename = function() {
       paste("Network_", Sys.Date(), ".zip", sep = "")
     },
@@ -488,7 +516,7 @@ server <- function(input, output, session) {
   )
   
   
-  output$downloadWeightedNetwork <- downloadHandler(
+  output$downloadWeightedNetwork <- galaxy_ie_download_with(downloads, "downloadWeightedNetwork",
     filename = function() {
       paste("weighted_network_", Sys.Date(), ".csv", sep = "")
     },
@@ -512,7 +540,7 @@ server <- function(input, output, session) {
     }
   )
   
-  output$downloadEdgeList <- downloadHandler(
+  output$downloadEdgeList <- galaxy_ie_download_with(downloads, "downloadEdgeList",
     filename = function() {
       paste("edge_list_", Sys.Date(), ".csv", sep = "")
     },
@@ -527,7 +555,7 @@ server <- function(input, output, session) {
     }
   )
   
-  output$downloadSampleData <- downloadHandler(
+  output$downloadSampleData <- galaxy_ie_download_with(downloads, "downloadSampleData",
     filename = function() {
       "sample_data.csv"  # The name of the file the user will download
     },
@@ -536,7 +564,7 @@ server <- function(input, output, session) {
     }
   )
   
-  output$downloadSampleNet<- downloadHandler(
+  output$downloadSampleNet <- galaxy_ie_download_with(downloads, "downloadSampleNet",
     filename = function() {
       "weighted_network.csv"  # The name of the file the user will download
     },
@@ -562,8 +590,12 @@ server <- function(input, output, session) {
         }
         network <- as.matrix(read.csv(file_path, row.names = 1, check.names = FALSE))
       } else if (input$fileOption == "Upload Weighted Network (CSV file)") {
-        req(input$weightedFile)
-        network <- as.matrix(read.csv(input$weightedFile$datapath, row.names = 1, check.names = FALSE))
+        path <- cminet_resolve_input(
+          input$weightedFile,
+          Sys.getenv("CMINET_WEIGHTED_NETWORK", unset = "")
+        )
+        req(path)
+        network <- as.matrix(read.csv(path, row.names = 1, check.names = FALSE))
         # Ensure the network is numeric
       } else {
         showNotification("Please select a valid file option.", type = "error")
@@ -614,8 +646,12 @@ server <- function(input, output, session) {
         }
         as.matrix(read.csv(file_path, row.names = 1, check.names = FALSE))
       } else if (input$finalFileOption == "Upload Weighted Network (CSV file)") {
-        req(input$finalWeightedFile)
-        as.matrix(read.csv(input$finalWeightedFile$datapath, row.names = 1, check.names = FALSE))
+        path <- cminet_resolve_input(
+          input$finalWeightedFile,
+          Sys.getenv("CMINET_WEIGHTED_NETWORK", unset = "")
+        )
+        req(path)
+        as.matrix(read.csv(path, row.names = 1, check.names = FALSE))
       } else {
         showNotification("Please select a valid file option.", type = "error")
         return(NULL)
@@ -656,13 +692,17 @@ server <- function(input, output, session) {
   })
   
   
-  output$downloadFinalWeightedNetwork <- downloadHandler(
+  output$downloadFinalWeightedNetwork <- galaxy_ie_download_with(downloads, "downloadFinalWeightedNetwork",
     filename = function() {
       "final_weighted_network.csv"
     },
     content = function(file) {
-      req(input$finalWeightedFile)
-      file.copy(input$finalWeightedFile$datapath, file)
+      path <- cminet_resolve_input(
+        input$finalWeightedFile,
+        Sys.getenv("CMINET_WEIGHTED_NETWORK", unset = "")
+      )
+      req(path)
+      file.copy(path, file)
     }
   )
 }
@@ -722,6 +762,8 @@ ui <- navbarPage(
     sidebarLayout(
       sidebarPanel(
         fileInput("file", "Upload Microbiome Data", accept = c(".csv")),
+        # Renders nothing unless running inside a Galaxy interactive tool.
+        galaxy_ie_picker_ui(),
         downloadButton("downloadSampleData", "Sample Data"),
         tags$i(
           class = "fa fa-question-circle",
