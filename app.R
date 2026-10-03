@@ -25,12 +25,6 @@ server <- function(input, output, session) {
   # "Send to Galaxy" buttons, injected next to every download in the app.
   downloads <- galaxy_ie_send_server(input, output, session, label = "CMiNet result")
 
-  # Picker for datasets already in this Galaxy history.
-  shiny::observeEvent(imported(), {
-    # An import repoints CMINET_INPUT at the downloaded copy; tell the file
-    # input about it so the form and the data() reactive both pick it up.
-    cminet_send_file_input(session, "file", Sys.getenv("CMINET_INPUT", unset = ""))
-  }, ignoreInit = TRUE)
 
   data <- reactive({
     path <- cminet_resolve_input(input$file, Sys.getenv("CMINET_INPUT", unset = ""))
