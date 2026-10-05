@@ -240,24 +240,33 @@ galaxy_ie_send <- function(path, name = basename(path), filetype = "auto") {
 # session on a slow Galaxy. Run it in a background Rscript instead. The helper
 # file is re-sourced in the child, so it needs to be locatable from the working
 # directory of the app.
-galaxy_ie_send_async <- function(path, name = basename(path), filetype = "auto", helper = "galaxy_ie.R") {
+# Uploads in a background process, so the browser is not held up by the API call.
+#
+# The child deliberately does NOT source this file. A Shiny app installed as an R
+# package (golem, as MicrobiomeProfiler is) has no source tree on disk at
+# runtime, so a child that re-sourced the helper would fail exactly where the
+# upload matters most. Everything the child needs is passed in as arguments, and
+# the environment (HISTORY_ID, API_KEY, ...) is inherited from the parent.
+galaxy_ie_send_async <- function(path, name = basename(path), filetype = "auto") {
   rscript <- file.path(R.home("bin"), "Rscript")
   if (!nzchar(name)) {
     return(invisible(FALSE))
   }
-  helper_path <- normalizePath(helper, mustWork = FALSE)
-  if (!nzchar(helper_path) || !file.exists(helper_path)) {
-    # Without the file the child cannot source it; fall back to the blocking
-    # call rather than dropping the upload silently.
-    galaxy_ie_log("async upload not possible, helper not found; uploading synchronously name=", name)
-    invisible(galaxy_ie_send(path, name, filetype)$ok)
+  put <- galaxy_ie_put()
+  if (is.na(put)) {
+    galaxy_ie_log("async upload not possible, put not found; uploading synchronously name=", name)
+    return(invisible(galaxy_ie_send(path, name, filetype)$ok))
   }
-  expression <- paste0(
-    "source(", encodeString(helper_path, quote = "\""), "); ",
-    "galaxy_ie_app(", encodeString(galaxy_ie$app$prefix, quote = "\""), ", ",
-    encodeString(galaxy_ie$app$output_env, quote = "\""), "); ",
-    "galaxy_ie_send(", encodeString(normalizePath(path, mustWork = FALSE), quote = "\""), ", ",
-    encodeString(name, quote = "\""), ", ", encodeString(filetype, quote = "\""), ")"
+
+  # Exactly the same call galaxy_ie_send() makes: `put` derives the dataset name
+  # from the file's basename, so the path has to be the saved copy in the output
+  # directory (which is named after the download) rather than a temp file.
+  expression <- sprintf(
+    "invisible(system2(%s, c(\"-p\", %s, \"-t\", %s, \"--history-id\", %s), stdout = FALSE, stderr = FALSE))",
+    encodeString(put, quote = "\""),
+    encodeString(normalizePath(path, mustWork = FALSE), quote = "\""),
+    encodeString(filetype, quote = "\""),
+    encodeString(galaxy_ie_history(), quote = "\"")
   )
   system2(
     rscript,
@@ -266,6 +275,7 @@ galaxy_ie_send_async <- function(path, name = basename(path), filetype = "auto",
     stderr = FALSE,
     wait = FALSE
   )
+  galaxy_ie_log("async upload started name=", name, " path=", path)
   invisible(TRUE)
 }
 
@@ -696,12 +706,7 @@ galaxy_ie_picker_ui <- function(id = "galaxy_ie_import", label = "Import from Ga
       "into the input above."
     ),
     shiny::uiOutput(paste0(id, "_choices")),
-    shiny::actionButton(
-      paste0(id, "_go"),
-      "Import",
-      class = "btn-primary btn-sm",
-      style = "margin-top: 6px;"
-    )
+
   )
 }
 
@@ -730,10 +735,10 @@ galaxy_ie_picker_server <- function(input, output, session, id = "galaxy_ie_impo
     )
   })
 
-  shiny::observeEvent(input[[paste0(id, "_go")]], {
+  shiny::observeEvent(input[[paste0(id, "_selected")]], {
     entries <- galaxy_ie_history_entries()
     chosen <- input[[paste0(id, "_selected")]]
-    if (is.null(entries)) entries <- character(0)
+    if (is.null(entries) || is.null(chosen) || !length(chosen)) return()
     selection <- entries[intersect(chosen, names(entries))]
 
     result <- galaxy_ie_import(selection)
@@ -747,7 +752,7 @@ galaxy_ie_picker_server <- function(input, output, session, id = "galaxy_ie_impo
       type = if (result$ok) "message" else "error",
       duration = if (result$ok) 8 else 15
     )
-  })
+  }, ignoreInit = TRUE)
 
   selected
 }
